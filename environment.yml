@@ -1,0 +1,25 @@
+name: learnmate
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - langchain==0.1.16
+      - langchain-community==0.0.35
+      - langchain-openai==0.1.2
+      - openai==1.14.2
+      - faiss-cpu==1.7.4
+      - python-dotenv
+      - tiktoken
+      - pydantic==1.10.13
+      - numpy
+      - pandas
+      - PyPDF2
+      - typing_extensions
+      - idna
+      - streamlit
+      - sniffio
+      - annotated-types
+      - anyio 
