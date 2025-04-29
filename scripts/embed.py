@@ -1,30 +1,36 @@
-from langchain_community.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
-
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.docstore.document import Document
 
-load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
+MD_DIR = "/Users/jeong/AI/learnmate/data/abstracts"
+VECTOR_DIR = "vectordb_md"
 
+def load_md_documents(md_dir):
+    documents = []
+    for filename in os.listdir(md_dir):
+        if filename.endswith(".md"):
+            filepath = os.path.join(md_dir, filename)
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+                documents.append(Document(page_content=content, metadata={"source": filename}))
+    return documents
 
-pdf_dir = "data/papers"
-vector_store_dir = "vectordb"
+def build_vector_db(documents):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_documents(documents)
 
-all_docs = []
+    embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    db = FAISS.from_documents(chunks, embedding)
+    db.save_local(VECTOR_DIR)
+    print(f"✅ 벡터 DB 저장 완료: {VECTOR_DIR} (총 {len(chunks)}개 조각)")
 
-for filename in os.listdir(pdf_dir):
-    if filename.endswith(".pdf"):
-        loader = PyPDFLoader(os.path.join(pdf_dir, filename))
-        docs = loader.load()
-        all_docs.extend(docs)
-
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-split_docs = text_splitter.split_documents(all_docs)
-
-db = FAISS.from_documents(split_docs, embedding)
-db.save_local(vector_store_dir)
-
-print("✅ 벡터 저장 완료!")
+if __name__ == "__main__":
+    print("📂 MD 요약 파일 로딩 중...")
+    docs = load_md_documents(MD_DIR)
+    if not docs:
+        print("❌ .md 문서가 없습니다.")
+    else:
+        print(f"📄 {len(docs)}개 문서 로딩 완료")
+        build_vector_db(docs)
