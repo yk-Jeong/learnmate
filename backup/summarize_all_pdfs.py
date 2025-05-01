@@ -9,7 +9,7 @@ from datetime import datetime
 PDF_DIR = "/Users/jeong/AI/learnmate/data/papers"
 SUMMARY_DIR = "/Users/jeong/AI/learnmate/data/abstracts"
 
-# 환경 변수에서 OpenAI API 키 불러오기
+# OpenAI API 키 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -33,10 +33,10 @@ def chunk_text(text, max_chars=4000):
 def summarize_single_chunk(chunk):
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4.1",
             messages=[
                 {"role": "system", "content": "너는 교육 관련 논문을 요약하는 한국어 전문가야. 핵심을 조리 있게 요약해줘."},
-                {"role": "user", "content": f"다음 내용을 요약해줘:\n{chunk}"}
+                {"role": "user", "content": f"다음 내용을 2000단어 이내로 요약해줘:\n{chunk}"}
             ],
             max_tokens=800,
             temperature=0.3

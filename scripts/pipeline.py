@@ -1,6 +1,5 @@
 import os
 import requests
-import xml.etree.ElementTree as ET
 import pdfplumber
 from datetime import datetime
 from openai import OpenAI
@@ -19,57 +18,56 @@ PDF_DIR = "/Users/jeong/AI/learnmate/data/papers"
 SUMMARY_DIR = "/Users/jeong/AI/learnmate/data/abstracts"
 VECTOR_STORE_DIR = "/Users/jeong/AI/learnmate/vectordb"
 
-KEYWORD = "learning strategy of student"
-START_INDEX = 0 
-MAX_RESULTS = 50
+KEYWORD = 'learning strategy or metacognition of student'
+START_INDEX = 0
+MAX_RESULTS = 200
 TITLE_SLICE = 60
 CHUNK_SIZE = 3000
+CATEGORY = "education" 
 
 # =========================
 # 환경 설정
 # =========================
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 # =========================
 # 함수 정의
 # =========================
-
 def sanitize_filename(text):
     return "".join(c for c in text if c.isalnum() or c in " ._-").rstrip()
 
-def fetch_arxiv(keyword=KEYWORD, start_index=START_INDEX, max_results=MAX_RESULTS):
+def fetch_semantic_scholar(keyword=KEYWORD, start_index=START_INDEX, max_results=MAX_RESULTS, category=CATEGORY):
     os.makedirs(PDF_DIR, exist_ok=True)
     os.makedirs(SUMMARY_DIR, exist_ok=True)
 
-    print(f"📡 arXiv에서 '{keyword}' 검색 중...")
+    print(f"📡 Semantic Scholar에서 '{keyword}' 검색 중...")
 
-    base_url = "http://export.arxiv.org/api/query"
+    base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
     params = {
-        "search_query": f"title:{keyword}",
-        "start": start_index,
-        "max_results": max_results,
-        "sortBy": "submittedDate",
-        "sortOrder": "descending"
+        "query": f"{keyword} AND field:{category} AND has_pdf:true",  # PDF가 있는 논문만 검색
+        "offset": start_index,
+        "limit": max_results,
+        "sort": "relevance"
     }
 
     try:
         res = requests.get(base_url, params=params)
         res.raise_for_status()
     except Exception as e:
-        print(f"❌ arXiv 요청 실패: {e}")
-        return
+        print(f"❌ Semantic Scholar 요청 실패: {e}")
+        return []
 
-    root = ET.fromstring(res.text)
-    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    papers = res.json().get('data', [])
+    print(f"🔍 {len(papers)}편 논문 검색됨\n")
 
-    entries = root.findall("atom:entry", ns)
-    print(f"🔍 {len(entries)}편 논문 검색됨\n")
+    for paper in papers:
+        title = paper.get("title", "").strip()
+        abstract = paper.get("abstract", "").strip()
+        pdf_url = paper.get("url", "")  # PDF URL을 추출
 
-    for entry in entries:
-        title = entry.find("atom:title", ns).text.strip()
-        summary = entry.find("atom:summary", ns).text.strip()
-        pdf_url = entry.find("atom:id", ns).text.strip().replace("abs", "pdf")
+        if not pdf_url:  # pdf_url이 비어있으면 처리
+            print(f"⚠️ PDF URL이 없습니다: {title}")
+            continue  # PDF URL이 없으면 다음 논문으로 넘어갑니다.
 
         filename_base = sanitize_filename(title[:TITLE_SLICE])
         md_path = os.path.join(SUMMARY_DIR, f"{filename_base}.md")
@@ -78,19 +76,23 @@ def fetch_arxiv(keyword=KEYWORD, start_index=START_INDEX, max_results=MAX_RESULT
         # 요약 저장
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(f"# {title}\n\n")
-            f.write(f"**Abstract:**\n{summary}\n\n")
-            f.write(f"[arXiv 원문 링크]({pdf_url})\n")
+            f.write(f"**Abstract:**\n{abstract}\n\n")
+            f.write(f"[Semantic Scholar 원문 링크]({pdf_url})\n")
         print(f"📝 요약 저장 완료: {md_path}")
 
         # PDF 다운로드
         try:
-            pdf_res = requests.get(pdf_url + ".pdf")
+            print(f"PDF URL: {pdf_url}")  # URL 출력 확인
+            pdf_res = requests.get(pdf_url)
             pdf_res.raise_for_status()
             with open(pdf_path, "wb") as f:
                 f.write(pdf_res.content)
             print(f"✅ PDF 저장 완료: {pdf_path}")
         except Exception as e:
             print(f"❌ PDF 다운로드 실패: {e}")
+
+    return papers  # 검색된 논문 목록 반환
+
 
 def extract_text_from_pdf(pdf_path):
     try:
@@ -109,10 +111,10 @@ def chunk_text(text, max_chars=CHUNK_SIZE):
 def summarize_text(text):
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4.1",
             messages=[
                 {"role": "system", "content": "너는 교육 관련 논문을 요약하는 한국어 전문가야. 핵심을 명확히 요약해줘."},
-                {"role": "user", "content": f"다음 논문을 요약해줘:\n{text}"}
+                {"role": "user", "content": f"다음 논문을 2000단어로 요약해줘:\n{text}"}
             ],
             max_tokens=1000,
             temperature=0.3
@@ -132,9 +134,8 @@ def save_summary_to_md(title, summary):
 # =========================
 # 메인 파이프라인
 # =========================
-
 def run_pipeline():
-    fetch_arxiv()
+    all_papers = fetch_semantic_scholar()
 
     all_docs = []
 
@@ -147,6 +148,7 @@ def run_pipeline():
 
         text = extract_text_from_pdf(pdf_path)
         if not text:
+            print(f"⚠️ PDF에서 텍스트 추출 실패 → {filename}")
             continue
 
         # Chunk 분할 → DB 저장용
