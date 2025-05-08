@@ -11,12 +11,12 @@
     
     | 구성 요소 | 도구 |
     | --- | --- |
-    | 문헌 전처리 | **PyPDF2, pdfplumber** |
-    | Sentence embedding model | **intfloat/multilingual-e5-large** |
-    | Vector DB | **FAISS** |
-    | RAG framework | **LangChain** |
-    | LLM API  | **OpenAI GPT-4o, gpt-4.1**  |
-    | UI framework | **Streamlit** |
+    | 문헌 전처리 | PyPDF2, pdfplumber |
+    | Sentence embedding model | intfloat/multilingual-e5-large |
+    | Vector DB | FAISS |
+    | RAG framework | LangChain |
+    | LLM API  | OpenAI GPT-4o, gpt-4.1  |
+    | UI framework | Streamlit |
 2. **데이터 구성**
     
     
