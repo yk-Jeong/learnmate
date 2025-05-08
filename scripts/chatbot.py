@@ -23,7 +23,7 @@ if not openai_api_key:
     raise ValueError("OPENAI_API_KEY not found in .env file")
 
 # 벡터 DB 로드
-embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+embedding = HuggingFaceEmbeddings(model_name=os.getenv("EMBEDDING_MODEL"))
 try:
     db = FAISS.load_local("vectordb", embedding, allow_dangerous_deserialization=True)
     retriever = db.as_retriever(search_kwargs={"k": 2})
@@ -40,11 +40,9 @@ llm = ChatOpenAI(
 # 시스템 프롬프트 설정
 system_prompt = (
     "your persona: 중고등학생의 학업 고민을 들어주는 따뜻하고 전략적인 대학생 멘토"
-    "아래 문서를 참고해서, 선배가 후배에게 조언하듯 친절하게 제안"
-    "먼저 질문자의 상황에 공감하고, 이어서 [전략 → 실천] 구조로 답변"
-    "텍스트+멀티모달 출력(예시카드 등등)"
-    "해요체로 작성"
-    "/Users/jeong/AI/learnmate/data/abstracts 내의 데이터에 기반할 것"
+    "선배가 후배에게 조언하듯 friendly and gentle mood를 유지, 친근한 반말로 답변"
+    "먼저 질문자의 상황에 공감하고, 이어서 [전략 → 실천] 구조로 답변할 것"
+    "답변의 학술적 근거는 /Users/jeong/AI/learnmate/data/abstracts 내의 데이터에 기반할 것"
 )
 
 prompt = ChatPromptTemplate.from_messages([
@@ -73,7 +71,7 @@ def ask_rag(question):
 # Streamlit UI
 st.set_page_config(page_title="Learnmate", layout="wide")
 st.title("Learnmate: 학습 고민을 나누어요!")
-st.markdown(f"{file_count}편의 실제 논문에 기반해서, 당신의 학습 고민을 과학적으로 해소해 드립니다.")
+st.markdown(f"{file_count}편의 최신 교육 논문에 기반해서, 당신의 학습 고민을 과학적으로 해소해 드립니다.")
 
 question = st.text_input("무엇을 도와 드릴까요? 구체적으로 질문할수록, 자세하게 대답해 드릴 수 있어요!")
 

@@ -1,180 +1,201 @@
 import os
+import time
 import requests
 import pdfplumber
-from datetime import datetime
 from openai import OpenAI
-from textwrap import wrap
+from datetime import datetime
 from dotenv import load_dotenv
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from textwrap import TextWrapper
 
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # =========================
 # 설정
 # =========================
-PDF_DIR = "/Users/jeong/AI/learnmate/data/papers"
-SUMMARY_DIR = "/Users/jeong/AI/learnmate/data/abstracts"
-VECTOR_STORE_DIR = "/Users/jeong/AI/learnmate/vectordb"
+BASE_URL = "https://eric.ed.gov"
+SEARCH_URL = "https://eric.ed.gov/?q=learning+strategy+OR+study+skill+OR+metacognition+of+student&ft=on&ff1=dtySince_2024"
 
-KEYWORD = 'learning strategy or metacognition of student'
-START_INDEX = 0
-MAX_RESULTS = 200
+PDF_DIR = "data/papers"
+SUMMARY_DIR = "data/abstracts"
+VECTOR_STORE_DIR = "vectordb"
 TITLE_SLICE = 60
-CHUNK_SIZE = 3000
-CATEGORY = "education" 
+CHUNK_SIZE = 5000  # Max chunk size in tokens
 
 # =========================
 # 환경 설정
 # =========================
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 # =========================
 # 함수 정의
 # =========================
 def sanitize_filename(text):
     return "".join(c for c in text if c.isalnum() or c in " ._-").rstrip()
 
-def fetch_semantic_scholar(keyword=KEYWORD, start_index=START_INDEX, max_results=MAX_RESULTS, category=CATEGORY):
-    os.makedirs(PDF_DIR, exist_ok=True)
-    os.makedirs(SUMMARY_DIR, exist_ok=True)
+def fetch_paper_links(max_pages=10):
+    print(f"🔍 ERIC 논문 목록 가져오는 중...")
+    paper_links = []
+    page_num = 0
+    next_url = SEARCH_URL
 
-    print(f"📡 Semantic Scholar에서 '{keyword}' 검색 중...")
-
-    base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
-    params = {
-        "query": f"{keyword} AND field:{category} AND has_pdf:true",  # PDF가 있는 논문만 검색
-        "offset": start_index,
-        "limit": max_results,
-        "sort": "relevance"
-    }
-
-    try:
-        res = requests.get(base_url, params=params)
-        res.raise_for_status()
-    except Exception as e:
-        print(f"❌ Semantic Scholar 요청 실패: {e}")
-        return []
-
-    papers = res.json().get('data', [])
-    print(f"🔍 {len(papers)}편 논문 검색됨\n")
-
-    for paper in papers:
-        title = paper.get("title", "").strip()
-        abstract = paper.get("abstract", "").strip()
-        pdf_url = paper.get("url", "")  # PDF URL을 추출
-
-        if not pdf_url:  # pdf_url이 비어있으면 처리
-            print(f"⚠️ PDF URL이 없습니다: {title}")
-            continue  # PDF URL이 없으면 다음 논문으로 넘어갑니다.
-
-        filename_base = sanitize_filename(title[:TITLE_SLICE])
-        md_path = os.path.join(SUMMARY_DIR, f"{filename_base}.md")
-        pdf_path = os.path.join(PDF_DIR, f"{filename_base}.pdf")
-
-        # 요약 저장
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(f"# {title}\n\n")
-            f.write(f"**Abstract:**\n{abstract}\n\n")
-            f.write(f"[Semantic Scholar 원문 링크]({pdf_url})\n")
-        print(f"📝 요약 저장 완료: {md_path}")
-
-        # PDF 다운로드
+    while next_url and page_num < max_pages:
+        page_num += 1
+        print(f"📄 페이지 {page_num} 요청 중: {next_url}")
         try:
-            print(f"PDF URL: {pdf_url}")  # URL 출력 확인
+            res = requests.get(next_url)
+            res.raise_for_status()
+        except Exception as e:
+            print(f"⚠️ 요청 실패 (페이지 {page_num}): {e}")
+            break
+
+        soup = BeautifulSoup(res.text, "html.parser")
+
+        entries = soup.select(".r_i")
+        links = [urljoin(BASE_URL, entry.select_one("a")["href"]) for entry in entries if entry.select_one("a")]
+        paper_links.extend(links)
+
+        next_button = soup.find("a", string="Next Page »")
+        if next_button and next_button.get("href"):
+            next_url = urljoin(BASE_URL, next_button["href"])
+        else:
+            next_url = None
+
+        time.sleep(1)
+
+    print(f"📚 총 {len(paper_links)}편 논문 수집 완료 (최대 {max_pages}페이지 기준)")
+    return paper_links
+
+
+
+def download_pdf(paper_url):
+    eric_id = paper_url.split("id=")[-1]
+    title = eric_id
+    pdf_url = f"http://files.eric.ed.gov/fulltext/{eric_id}.pdf"
+    filename = sanitize_filename(title[:TITLE_SLICE]) + ".pdf"
+    path = os.path.join(PDF_DIR, filename)
+
+    if not os.path.exists(path):
+        print(f"⬇️ 다운로드 중: {eric_id}")
+        try:
             pdf_res = requests.get(pdf_url)
             pdf_res.raise_for_status()
-            with open(pdf_path, "wb") as f:
+            with open(path, "wb") as f:
                 f.write(pdf_res.content)
-            print(f"✅ PDF 저장 완료: {pdf_path}")
+            print(f"✅ 저장 완료: {path}")
+            return eric_id, path
         except Exception as e:
-            print(f"❌ PDF 다운로드 실패: {e}")
-
-    return papers  # 검색된 논문 목록 반환
-
+            print(f"❌ PDF 다운로드 실패 ({eric_id}): {e}")
+            return None, None
+    else:
+        print(f"📦 이미 존재함: {path}")
+        return eric_id, path
 
 def extract_text_from_pdf(pdf_path):
     try:
-        text = ""
         with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-        return text.strip()
+            return "".join(page.extract_text() or "" for page in pdf.pages).strip()
     except Exception as e:
-        print(f"❌ PDF 로딩 오류 ({pdf_path}): {e}")
+        print(f"❌ PDF 로딩 실패: {e}")
         return ""
 
-def chunk_text(text, max_chars=CHUNK_SIZE):
-    return wrap(text, width=max_chars)
+def chunk_text(text, max_tokens=CHUNK_SIZE):
+    # Estimate token count by considering a rough average of 4 characters per token
+    max_chars = max_tokens * 4  # approximate
+    wrapper = TextWrapper(width=max_chars, break_long_words=False)
+    return wrapper.wrap(text)
 
 def summarize_text(text):
     try:
-        response = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {"role": "system", "content": "너는 교육 관련 논문을 요약하는 한국어 전문가야. 핵심을 명확히 요약해줘."},
-                {"role": "user", "content": f"다음 논문을 2000단어로 요약해줘:\n{text}"}
-            ],
-            max_tokens=1000,
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
+        # Split text into smaller chunks based on token length
+        chunks = chunk_text(text)
+        summaries = []
+        
+        for chunk in chunks:
+            # Check token length for each chunk to avoid exceeding the limit
+            response = client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {"role": "system", "content": "너는 교육 관련 논문을 요약하는 한국어 전문가야. 핵심 내용을 요약해줘."},
+                    {"role": "user", "content": f"다음 논문을 10000단어 내외로 요약:\n{chunk}"}
+                ],
+                max_tokens=1000,
+                temperature=0.3
+            )
+            summaries.append(response.choices[0].message.content.strip())
+        
+        return " ".join(summaries)  # Combine all summaries from chunks
     except Exception as e:
-        print(f"❌ 최종 요약 실패: {e}")
+        print(f"❌ 요약 실패: {e}")
         return ""
 
 def save_summary_to_md(title, summary):
-    filename = "".join(c for c in title[:TITLE_SLICE] if c.isalnum() or c in " ._-").rstrip().replace(" ", "_") + ".md"
+    filename = sanitize_filename(title[:TITLE_SLICE]) + ".md"
     path = os.path.join(SUMMARY_DIR, filename)
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"# {title}\n\n{summary}\n")
-    print(f"✅ 최종 요약 저장 완료: {path}")
+    print(f"✅ 요약 저장 완료: {path}")
+    return path
 
-# =========================
-# 메인 파이프라인
-# =========================
 def run_pipeline():
-    all_papers = fetch_semantic_scholar()
+    os.makedirs(PDF_DIR, exist_ok=True)
+    os.makedirs(SUMMARY_DIR, exist_ok=True)
 
+    links = fetch_paper_links(max_pages=10)
     all_docs = []
 
-    for filename in os.listdir(PDF_DIR):
-        if not filename.endswith(".pdf"):
+    for link in links:
+        try:
+            title, pdf_path = download_pdf(link)
+            if not pdf_path:
+                continue
+
+            # 요약 .md 파일이 이미 존재하면 스킵
+            md_filename = sanitize_filename(title[:TITLE_SLICE]) + ".md"
+            md_path = os.path.join(SUMMARY_DIR, md_filename)
+            if os.path.exists(md_path):
+                print(f"⏩ 이미 요약됨: {md_path}")
+                continue
+
+            text = extract_text_from_pdf(pdf_path)
+            os.remove(pdf_path)
+            print(f"🗑 PDF 삭제 완료: {pdf_path}")
+
+            if not text:
+                print(f"⏩ 텍스트 없음: {title}")
+                continue
+
+            summary = summarize_text(text)
+            if not summary:
+                continue
+
+            save_summary_to_md(title, summary)
+            chunks = chunk_text(summary)
+
+            for idx, chunk in enumerate(chunks):
+                doc = Document(page_content=chunk, metadata={"source": md_path, "chunk_idx": idx})
+                all_docs.append(doc)
+
+            time.sleep(2)
+
+        except Exception as e:
+            print(f"❌ 처리 실패: {e}")
             continue
 
-        pdf_path = os.path.join(PDF_DIR, filename)
-        print(f"\n📄 논문 처리 시작: {filename}")
-
-        text = extract_text_from_pdf(pdf_path)
-        if not text:
-            print(f"⚠️ PDF에서 텍스트 추출 실패 → {filename}")
-            continue
-
-        # Chunk 분할 → DB 저장용
-        chunks = chunk_text(text)
-        for idx, chunk in enumerate(chunks):
-            doc = Document(page_content=chunk, metadata={"source": filename, "chunk_idx": idx})
-            all_docs.append(doc)
-
-        # 최종 요약 → .md 저장
-        summary = summarize_text(text)
-        if summary:
-            save_summary_to_md(filename.replace(".pdf", ""), summary)
-
-        # PDF 삭제
-        os.remove(pdf_path)
-        print(f"🗑 PDF 삭제 완료: {pdf_path}")
-
-    # 모든 문서 FAISS 저장
     if all_docs:
-        print("\n🧠 모든 chunk를 벡터화 중...")
-        embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        print("\n🧠 모든 요약을 벡터화 중...")
+        embedding = HuggingFaceEmbeddings(model_name=os.getenv("EMBEDDING_MODEL"))
         db = FAISS.from_documents(all_docs, embedding)
         db.save_local(VECTOR_STORE_DIR)
         print(f"✅ 벡터 DB 저장 완료: {VECTOR_STORE_DIR}")
+    else:
+        print("📭 벡터화할 문서가 없습니다.")
 
 # 실행
 if __name__ == "__main__":
-    print(f"⏱ 전체 파이프라인 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    print(f"\n⏱ 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     run_pipeline()
